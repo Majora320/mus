@@ -1,25 +1,32 @@
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
-use druid::{BoxConstraints, Color, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle, LifeCycleCtx, PaintCtx, Point, Rect, RenderContext, Size, TextLayout, UpdateCtx, Widget, Affine, Vec2};
+use druid::{Affine, BoxConstraints, Data, Env, Event, EventCtx, LayoutCtx, Lens, LifeCycle,
+            LifeCycleCtx, MouseButton, PaintCtx, Point, Rect, RenderContext, Size, TextLayout,
+            UpdateCtx, Vec2, Widget};
+use druid::scroll_component::ScrollComponent;
+use druid::theme::SELECTION_COLOR;
 use druid::widget::Viewport;
+use log::trace;
 
+use crate::colors::ALT_BACKGROUND_COLOR;
 use crate::db::{Track, TrackField};
 use crate::WrappedTrackList;
-use druid::scroll_component::ScrollComponent;
 
-const SPACER_SIZE: f64 = 5.0;
+// equal space on the top/bottom
+const SPACER_SIZE: f64 = 6.0;
 
 #[derive(Clone, Data, Lens)]
 pub struct TrackListData {
     tracks: WrappedTrackList,
-    selected_track: isize,
+    selected_tracks: Arc<RwLock<Vec<usize>>>,
 }
 
 impl TrackListData {
     pub fn new(tracks: Vec<Track>) -> Self {
         TrackListData {
             tracks: Arc::new(RwLock::new(tracks)),
-            selected_track: -1,
+            selected_tracks: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }
@@ -58,7 +65,7 @@ impl TrackList {
 
     fn total_size(&self, avail_size: Size) -> Size {
         let n_rows = self.children.len() / self.columns.len();
-        let height = n_rows as f64 * self.row_height() + SPACER_SIZE;
+        let height = n_rows as f64 * self.row_height();
 
         Size::new(avail_size.width, avail_size.height.max(height))
     }
@@ -69,13 +76,26 @@ impl TrackList {
 }
 
 impl Widget<TrackListData> for TrackList {
-    fn event(&mut self, ctx: &mut EventCtx, event: &Event, _data: &mut TrackListData, env: &Env) {
+    fn event(&mut self, ctx: &mut EventCtx, event: &Event, data: &mut TrackListData, env: &Env) {
+        println!("{:#?}", event);
         self.scroll.event(self.viewport.as_mut().unwrap_or(&mut Viewport::default()), ctx, event, env);
         self.scroll.handle_scroll(self.viewport.as_mut().unwrap_or(&mut Viewport::default()), ctx, event, env);
 
         if !ctx.is_handled() {
             match event {
-                // TODO
+                Event::MouseDown(evt) => {
+                    if let MouseButton::Left = evt.button {
+                        // Set selection
+                        let abs_pos = self.viewport.unwrap().rect.y0 + evt.pos.y;
+                        let mut tr = data.selected_tracks.write().unwrap();
+                        tr.clear();
+                        tr.push((abs_pos / self.row_height()) as usize);
+                        trace!("Rows selected: {:?}", tr.deref());
+                        ctx.request_paint();
+                        ctx.set_handled();
+                    }
+                }
+                _ => ()
             }
         }
     }
@@ -88,8 +108,9 @@ impl Widget<TrackListData> for TrackList {
         }
     }
 
-    fn update(&mut self, _ctx: &mut UpdateCtx, _old_data: &TrackListData, data: &TrackListData, _env: &Env) {
+    fn update(&mut self, ctx: &mut UpdateCtx, _old_data: &TrackListData, data: &TrackListData, _env: &Env) {
         self.update_children(data);
+        ctx.request_layout();
     }
 
     // This widget DOES NOT WORK with infinite-width containers
@@ -111,7 +132,7 @@ impl Widget<TrackListData> for TrackList {
         bc.max()
     }
 
-    fn paint(&mut self, ctx: &mut PaintCtx, _data: &TrackListData, env: &Env) {
+    fn paint(&mut self, ctx: &mut PaintCtx, data: &TrackListData, env: &Env) {
         // Now we have to draw the subset of the screen that fits into the viewport
         // It's a bit of a pain to do this custom but otherwise performance tanks hard
 
@@ -132,34 +153,25 @@ impl Widget<TrackListData> for TrackList {
             y: -offset,
         }));
 
-        // Draw row seperators, starting from above start_row and ending above end_row + 1
-        // We don't strictly need to draw the extra seperator here, but it avoids having to special
-        // case the end of the list and it'll just get clipped off otherwise.
-        for row in 0..=(end_row - start_row + 1) {
-            let point = Point::new(2., row as f64 * self.row_height() + 2.);
-            let width = ctx.size().width - 4.;
-            ctx.fill(Rect::from_origin_size(point, Size::new(width, 1.)), &Color::grey8(128));
-        }
+        let mut y = SPACER_SIZE / 2.;
 
-        // Draw column separators.
-        let mut x = 2.;
-        for col in 0..=self.columns.len() {
-            // col 0 is the leftmost separator, not attached to any column
-            if col != 0 {
-                x += self.columns[col - 1].1 * avail_width;
-            }
-
-            let point = Point::new(x, 2.);
-            let height = ctx.size().height - 4. + offset; // 2 from the top and the bottom
-            ctx.fill(Rect::from_origin_size(point, Size::new(1., height)), &Color::grey8(128));
-        }
-
-        // Now comes the "fun" part
-        let mut y = SPACER_SIZE;
-
-        for row in start_row..end_row {
+        for row in start_row..=end_row {
             if row >= self.children.len() / self.columns.len() {
                 continue;
+            }
+
+            let background_rect = Rect::from_origin_size(
+                Point::new(0., y - (SPACER_SIZE / 2.)),
+                Size::new(ctx.size().width, self.row_height()),
+            );
+
+            // Draw background fill for odd numbered rows/selected
+            if row % 2 != 0 {
+                ctx.fill(background_rect, &env.get(ALT_BACKGROUND_COLOR));
+            }
+
+            if data.selected_tracks.read().unwrap().contains(&row) {
+                ctx.fill(background_rect, &env.get(SELECTION_COLOR));
             }
 
             let mut x = SPACER_SIZE;

@@ -1,15 +1,16 @@
 use std::sync::{Arc, RwLock};
 
-use druid::{AppLauncher, Data, Lens, RenderContext, Size, Widget, WidgetExt, WindowDesc};
-use druid::Color;
+use druid::{AppLauncher, Color, Data, Lens, RenderContext, Size, Widget, WidgetExt, WindowDesc};
 use druid::widget::{Flex, Label, Painter};
 use rodio::{OutputStream, Sink};
 
 use crate::db::{Database, Track};
 use crate::tracklist::{TrackList, TrackListData};
+use crate::colors::ALT_BACKGROUND_COLOR;
 
 mod db;
 mod tracklist;
+mod colors;
 
 type WrappedTrackList = Arc<RwLock<Vec<Track>>>;
 
@@ -24,14 +25,17 @@ struct AppData {
 fn main() {
     pretty_env_logger::init();
 
-    let db = Database::new().expect("Launch failed.");
+    let mut db = Database::new().expect("Launch failed.");
     let (stream, handle) = OutputStream::try_default().unwrap();
     let sink = Sink::try_new(&handle).unwrap();
+
+    if db.libraries().unwrap().len() <= 1 {
+        let library = db.add_library("/data/Music".to_string(), "Music".to_string()).unwrap();
+        db.scan_library(library, true).unwrap();
+    }
+
     let tracks = db.dump_all_tracks().expect("Could not dump tracks.")
         .into_iter().collect();
-
-    // let library = db.add_library("/home/moses/Music".to_string(), "Music".to_string()).unwrap();
-    // println!("{:?}", db.scan_library(library, true).unwrap());
 
     let initial_state = AppData {
         db: Arc::new(RwLock::new(db)),
@@ -45,6 +49,9 @@ fn main() {
         .window_size(Size::new(1920.0, 1080.0));
 
     AppLauncher::with_window(main_window)
+        .configure_env(|env, _state| {
+            env.set(ALT_BACKGROUND_COLOR, Color::grey8(60));
+        })
         .launch(initial_state)
         .expect("launch failed");
 }

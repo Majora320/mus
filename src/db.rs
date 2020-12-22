@@ -1,3 +1,5 @@
+use std::fs::create_dir_all;
+
 use directories::ProjectDirs;
 use druid::Data;
 use log::{info, trace};
@@ -7,12 +9,12 @@ use taglib::File;
 use thiserror::Error;
 use thiserror::private::PathAsDisplay;
 use walkdir::WalkDir;
-use std::fs::create_dir_all;
 
 pub struct Database {
     conn: Connection
 }
 
+#[derive(Debug, Clone)]
 pub struct Library {
     id: i64,
     path: String,
@@ -140,10 +142,12 @@ impl Database {
     pub fn libraries(&self) -> Result<Vec<Library>, DatabaseError> {
         let mut stmt = self.conn.prepare("SELECT id, path, name FROM library;")?;
         let rows = stmt.query_map(NO_PARAMS, |row| {
+            let name: Option<String> = row.get(1)?;
+
             Ok(Library {
                 id: row.get(0)?,
                 path: row.get(1)?,
-                name: row.get(2)?,
+                name: name.unwrap_or_default(),
             })
         })?;
 
